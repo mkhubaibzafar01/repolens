@@ -125,8 +125,3 @@ def ask(body: Question):
     return {"answer": answer}
 
 
-@app.get("/")
-def home():
-    return FileResponse("static/index.html")
-
-app.mount("/static", StaticFiles(directory="static"), name="static")
