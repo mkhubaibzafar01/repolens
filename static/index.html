@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RepoLens</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+<style>
+:root{--bg:#f3f1ec;--ink:#14213d;--muted:#5b6478;--card:#fff;--line:#d9d5ca;--accent:#e08a00;}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1624;--ink:#e8ecf5;--muted:#9aa5bd;--card:#18223a;--line:#2b3856;--accent:#ffb23e;}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 Georgia,"Times New Roman",serif}
+main{max-width:920px;margin:0 auto;padding:48px 20px 80px}
+h1{font-size:clamp(2.2rem,6vw,3.6rem);margin:0;letter-spacing:-.02em}
+h2{font-size:1.3rem;margin:36px 0 12px}
+.sub{color:var(--muted);max-width:60ch;margin:8px 0 28px}
+form{display:flex;gap:10px;flex-wrap:wrap}
+input{flex:1;min-width:240px;padding:14px 16px;border:2px solid var(--ink);border-radius:8px;background:var(--card);color:var(--ink);font:inherit}
+button{padding:14px 22px;border:0;border-radius:8px;background:var(--accent);color:#1b1200;font:600 1rem system-ui,sans-serif;cursor:pointer}
+button:disabled{opacity:.5;cursor:wait}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px 18px;margin-bottom:10px}
+.card b{font-family:ui-monospace,Menlo,monospace;font-size:.92rem}
+.tags span{display:inline-block;border:1px solid var(--line);border-radius:99px;padding:2px 12px;margin:0 6px 6px 0;font:.85rem system-ui,sans-serif}
+.diagram{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px}
+ol{padding-left:22px} li{margin-bottom:10px}
+code{font-family:ui-monospace,Menlo,monospace;font-size:.9em;background:var(--line);padding:1px 6px;border-radius:4px}
+#chat{white-space:pre-wrap;margin-top:12px}
+.q{font-weight:700;margin-top:14px}
+.err{color:#c0392b;font-family:system-ui,sans-serif}
+.status{color:var(--muted);font-family:system-ui,sans-serif;margin-top:16px}
+[hidden]{display:none}
+</style>
+</head>
+<body>
+<main>
+  <h1>RepoLens</h1>
+  <p class="sub">Paste a public GitHub repository. Get a map of the codebase, a reading order, and answers to your questions.</p>
+  <form id="f">
+    <input id="url" type="url" required placeholder="https://github.com/pallets/flask" aria-label="GitHub repository URL">
+    <button id="go">Analyze repo</button>
+  </form>
+  <div id="status" class="status" role="status"></div>
+
+  <section id="out" hidden>
+    <h2 id="title"></h2>
+    <p id="overview"></p>
+    <div id="stack" class="tags"></div>
+
+    <h2>Architecture</h2>
+    <div class="diagram" id="diagram"></div>
+
+    <h2>Modules</h2>
+    <div id="modules"></div>
+
+    <h2>Read these files first</h2>
+    <ol id="path"></ol>
+
+    <h2>Ask the repo</h2>
+    <form id="qf">
+      <input id="q" required placeholder="Where is authentication handled?" aria-label="Question about the repo">
+      <button id="qb">Ask</button>
+    </form>
+    <div id="chat"></div>
+  </section>
+</main>
+
+<script>
+mermaid.initialize({startOnLoad:false, theme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark':'default'});
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let repoUrl = '';
+
+async function post(path, body){
+  const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  const j = await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(j.detail || 'Something went wrong. Try again.');
+  return j;
+}
+
+$('f').onsubmit = async e => {
+  e.preventDefault();
+  repoUrl = $('url').value.trim();
+  $('go').disabled = true; $('out').hidden = true;
+  $('status').className = 'status';
+  $('status').textContent = 'Reading the repo and asking Claude. This takes about 20 to 40 seconds.';
+  try{
+    const d = await post('/api/analyze', {repo_url: repoUrl});
+    $('title').textContent = d.repo;
+    $('overview').textContent = d.overview;
+    $('stack').innerHTML = (d.tech_stack||[]).map(t=>`<span>${esc(t)}</span>`).join('');
+    $('modules').innerHTML = (d.modules||[]).map(m=>`<div class="card"><b>${esc(m.path||m.name)}</b><br>${esc(m.summary)}</div>`).join('');
+    $('path').innerHTML = (d.reading_path||[]).map(p=>`<li><code>${esc(p.file)}</code><br>${esc(p.why)}</li>`).join('');
+    try{
+      const {svg} = await mermaid.render('g'+Date.now(), d.mermaid);
+      $('diagram').innerHTML = svg;
+    }catch{ $('diagram').innerHTML = '<pre>'+esc(d.mermaid)+'</pre>'; }
+    $('out').hidden = false; $('status').textContent = '';
+  }catch(err){
+    $('status').className = 'status err'; $('status').textContent = err.message;
+  }finally{ $('go').disabled = false; }
+};
+
+$('qf').onsubmit = async e => {
+  e.preventDefault();
+  const q = $('q').value.trim(); $('qb').disabled = true;
+  $('chat').insertAdjacentHTML('beforeend', `<div class="q">${esc(q)}</div><div id="pending">Thinking...</div>`);
+  try{
+    const d = await post('/api/ask', {repo_url: repoUrl, question: q});
+    $('pending').outerHTML = `<div>${esc(d.answer)}</div>`;
+  }catch(err){ $('pending').outerHTML = `<div class="err">${esc(err.message)}</div>`; }
+  $('q').value=''; $('qb').disabled = false;
+};
+</script>
+</body>
+</html>
