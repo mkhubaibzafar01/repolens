@@ -1,0 +1,5 @@
+{
+  "functions": {
+    "main.py": { "maxDuration": 60 }
+  }
+}

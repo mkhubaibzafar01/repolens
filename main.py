@@ -81,19 +81,39 @@ def context(data):
     return out[:90000]
 
 
+import time
+
+MODELS = [MODEL, "gemini-flash-latest", "gemini-flash-lite-latest"]
+
+
 def ask_claude(system, user, max_tokens=3000):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
     payload = {
         "systemInstruction": {"parts": [{"text": system}]},
         "contents": [{"role": "user", "parts": [{"text": user}]}],
-        "generationConfig": {"maxOutputTokens": 8192, "thinkingConfig": {"thinkingBudget": 0}},
+        "generationConfig": {"maxOutputTokens": 8192},
     }
-    r = httpx.post(url, json=payload, headers={"x-goog-api-key": API_KEY}, timeout=90)
-    if r.status_code == 429:
-        raise HTTPException(429, "Free limit reached. Wait a minute and try again.")
-    if r.status_code != 200:
-        raise HTTPException(502, f"AI error: {r.text[:200]}")
-    return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+    last = ""
+    for model in MODELS:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        for attempt in range(2):
+            try:
+                r = httpx.post(url, json=payload, headers={"x-goog-api-key": API_KEY}, timeout=60)
+            except httpx.HTTPError as e:
+                last = str(e)
+                time.sleep(1)
+                continue
+            if r.status_code == 200:
+                try:
+                    return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                except (KeyError, IndexError):
+                    last = "Empty answer from AI"
+                    break
+            last = r.text[:200]
+            if r.status_code in (429, 500, 503):
+                time.sleep(1.5)   # busy: retry, then next model
+                continue
+            break                 # other errors (404, 400): try next model
+    raise HTTPException(503, "The AI is busy right now. Please wait a few seconds and try again.")
 
 
 @app.post("/api/analyze")
